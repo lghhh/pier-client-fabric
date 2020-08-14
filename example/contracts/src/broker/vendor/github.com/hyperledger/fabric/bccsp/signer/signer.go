@@ -21,6 +21,7 @@ import (
 
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/bccsp/utils"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
 	"github.com/pkg/errors"
 )
 
@@ -57,11 +58,17 @@ func New(csp bccsp.BCCSP, key bccsp.Key) (crypto.Signer, error) {
 	}
 
 	pk, err := utils.DERToPublicKey(raw)
+	if err == nil {
+		return &bccspCryptoSigner{csp, key, pk}, nil
+
+	}
+
+	sm2pk, err := sm2.ParseSm2PublicKey(raw)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed marshalling der to public key")
 	}
 
-	return &bccspCryptoSigner{csp, key, pk}, nil
+	return &bccspCryptoSigner{csp, key, sm2pk}, nil
 }
 
 // Public returns the public key corresponding to the opaque,

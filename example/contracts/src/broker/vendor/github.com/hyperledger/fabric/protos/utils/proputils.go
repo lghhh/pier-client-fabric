@@ -578,9 +578,17 @@ func createProposalFromCDS(chainID string, msg proto.Message, creator []byte, pr
 func ComputeTxID(nonce, creator []byte) (string, error) {
 	// TODO: Get the Hash function to be used from
 	// channel configuration
-	digest, err := factory.GetDefault().Hash(
-		append(nonce, creator...),
-		&bccsp.SHA256Opts{})
+	var digest []byte
+	var err error
+	if factory.GetDefault().GetProviderName() == "SW" {
+		digest, err = factory.GetDefault().Hash(
+			append(nonce, creator...),
+			&bccsp.SHA256Opts{})
+	} else {
+		digest, err = factory.GetDefault().Hash(
+			append(nonce, creator...),
+			&bccsp.SM3Opts{})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -634,7 +642,13 @@ func computeProposalBindingInternal(nonce, creator []byte, epoch uint64) ([]byte
 
 	// TODO: add to genesis block the hash function used for
 	// the binding computation
-	return factory.GetDefault().Hash(
-		append(append(nonce, creator...), epochBytes...),
-		&bccsp.SHA256Opts{})
+	if factory.GetDefault().GetProviderName() == "SW" {
+		return factory.GetDefault().Hash(
+			append(append(nonce, creator...), epochBytes...),
+			&bccsp.SHA256Opts{})
+	} else {
+		return factory.GetDefault().Hash(
+			append(append(nonce, creator...), epochBytes...),
+			&bccsp.SM3Opts{})
+	}
 }

@@ -6,8 +6,6 @@ SPDX-License-Identifier: Apache-2.0
 package handlers
 
 import (
-	"crypto/ecdsa"
-
 	"github.com/hyperledger/fabric/bccsp"
 )
 
@@ -99,20 +97,20 @@ type Credential interface {
 type Revocation interface {
 
 	// NewKey generates a long term signing key that will be used for revocation
-	NewKey() (*ecdsa.PrivateKey, error)
+	NewKey() (interface{}, error)
 
 	// Sign creates the Credential Revocation Information for a certain time period (epoch).
 	// Users can use the CRI to prove that they are not revoked.
 	// Note that when not using revocation (i.e., alg = ALG_NO_REVOCATION), the entered unrevokedHandles are not used,
 	// and the resulting CRI can be used by any signer.
-	Sign(key *ecdsa.PrivateKey, unrevokedHandles [][]byte, epoch int, alg bccsp.RevocationAlgorithm) ([]byte, error)
+	Sign(key interface{}, unrevokedHandles [][]byte, epoch int, alg bccsp.RevocationAlgorithm) ([]byte, error)
 
 	// Verify verifies that the revocation PK for a certain epoch is valid,
 	// by checking that it was signed with the long term revocation key.
 	// Note that even if we use no revocation (i.e., alg = ALG_NO_REVOCATION), we need
 	// to verify the signature to make sure the issuer indeed signed that no revocation
 	// is used in this epoch.
-	Verify(pk *ecdsa.PublicKey, cri []byte, epoch int, alg bccsp.RevocationAlgorithm) error
+	Verify(pk interface{}, cri []byte, epoch int, alg bccsp.RevocationAlgorithm) error
 }
 
 // SignatureScheme is a local interface to decouple from the idemix implementation
@@ -148,7 +146,7 @@ type SignatureScheme interface {
 	// rhIndex: revocation handle index relative to attributes;
 	// revocationPublicKey: revocation public key;
 	// epoch: revocation epoch.
-	Verify(ipk IssuerPublicKey, signature, msg []byte, attributes []bccsp.IdemixAttribute, rhIndex int, revocationPublicKey *ecdsa.PublicKey, epoch int) error
+	Verify(ipk IssuerPublicKey, signature, msg []byte, attributes []bccsp.IdemixAttribute, rhIndex int, revocationPublicKey interface{}, epoch int) error
 }
 
 // NymSignatureScheme is a local interface to decouple from the idemix implementation

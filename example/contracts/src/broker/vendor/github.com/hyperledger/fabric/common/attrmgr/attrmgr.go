@@ -28,6 +28,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
 	"github.com/pkg/errors"
 )
 
@@ -115,7 +117,7 @@ func (mgr *Mgr) AddAttributesToCert(attrs *Attributes, cert *x509.Certificate) e
 }
 
 // GetAttributesFromCert gets the attributes from a certificate.
-func (mgr *Mgr) GetAttributesFromCert(cert *x509.Certificate) (*Attributes, error) {
+func (mgr *Mgr) GetAttributesFromCert(cert interface{}) (*Attributes, error) {
 	// Get certificate attributes from the certificate if it exists
 	buf, err := getAttributesFromCert(cert)
 	if err != nil {
@@ -177,10 +179,18 @@ func (a *Attributes) True(name string) error {
 }
 
 // Get the attribute info from a certificate extension, or return nil if not found
-func getAttributesFromCert(cert *x509.Certificate) ([]byte, error) {
-	for _, ext := range cert.Extensions {
-		if isAttrOID(ext.Id) {
-			return ext.Value, nil
+func getAttributesFromCert(cert interface{}) ([]byte, error) {
+	if factory.GetDefault().GetProviderName() == "SW" {
+		for _, ext := range cert.(*x509.Certificate).Extensions {
+			if isAttrOID(ext.Id) {
+				return ext.Value, nil
+			}
+		}
+	} else {
+		for _, ext := range cert.(*sm2.Certificate).Extensions {
+			if isAttrOID(ext.Id) {
+				return ext.Value, nil
+			}
 		}
 	}
 	return nil, nil

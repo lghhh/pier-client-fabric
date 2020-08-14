@@ -16,8 +16,6 @@ limitations under the License.
 
 package cid
 
-import "crypto/x509"
-
 // ChaincodeStubInterface is used by deployable chaincode apps to get identity
 // of the  agent (or user) submitting the transaction.
 type ChaincodeStubInterface interface {
@@ -51,5 +49,5 @@ type ClientIdentity interface {
 
 	// GetX509Certificate returns the X509 certificate associated with the client,
 	// or nil if it was not identified by an X509 certificate.
-	GetX509Certificate() (*x509.Certificate, error)
+	GetX509Certificate() (interface{}, error)
 }

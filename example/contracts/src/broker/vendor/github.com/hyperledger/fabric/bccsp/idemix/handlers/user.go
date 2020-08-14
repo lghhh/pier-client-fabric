@@ -9,6 +9,8 @@ import (
 	"crypto/sha256"
 
 	"github.com/hyperledger/fabric/bccsp"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm3"
 	"github.com/pkg/errors"
 )
 
@@ -37,9 +39,15 @@ func (k *userSecretKey) SKI() []byte {
 	if err != nil {
 		return nil
 	}
-	hash := sha256.New()
-	hash.Write(raw)
-	return hash.Sum(nil)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		hash := sha256.New()
+		hash.Write(raw)
+		return hash.Sum(nil)
+	} else {
+		hash := sm3.New()
+		hash.Write(raw)
+		return hash.Sum(nil)
+	}
 }
 
 func (*userSecretKey) Symmetric() bool {

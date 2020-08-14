@@ -26,6 +26,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
 )
 
 // struct to hold info required for PKCS#8
@@ -43,10 +45,11 @@ type ecPrivateKey struct {
 }
 
 var (
-	oidNamedCurveP224 = asn1.ObjectIdentifier{1, 3, 132, 0, 33}
-	oidNamedCurveP256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
-	oidNamedCurveP384 = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
-	oidNamedCurveP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+	oidNamedCurveP224    = asn1.ObjectIdentifier{1, 3, 132, 0, 33}
+	oidNamedCurveP256    = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+	oidNamedCurveP384    = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
+	oidNamedCurveP521    = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+	oidNamedCurveP256SM2 = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 301}
 )
 
 var oidPublicKeyECDSA = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
@@ -61,6 +64,8 @@ func oidFromNamedCurve(curve elliptic.Curve) (asn1.ObjectIdentifier, bool) {
 		return oidNamedCurveP384, true
 	case elliptic.P521():
 		return oidNamedCurveP521, true
+	case sm2.P256Sm2():
+		return oidNamedCurveP256SM2, true
 	}
 	return nil, false
 }
@@ -142,8 +147,14 @@ func PrivateKeyToPEM(privateKey interface{}, pwd []byte) ([]byte, error) {
 				Bytes: raw,
 			},
 		), nil
+	case *sm2.PrivateKey:
+		if k == nil {
+			return nil, errors.New("Invalid sm2 private key. It must be different from nil.")
+		}
+
+		return sm2.WritePrivateKeytoMem(privateKey.(*sm2.PrivateKey), pwd)
 	default:
-		return nil, errors.New("Invalid key type. It must be *ecdsa.PrivateKey or *rsa.PrivateKey")
+		return nil, errors.New("Invalid key type. It must be *ecdsa.PrivateKey or *rsa.PrivateKey or *sm2.PrivateKey")
 	}
 }
 
@@ -176,9 +187,15 @@ func PrivateKeyToEncryptedPEM(privateKey interface{}, pwd []byte) ([]byte, error
 		}
 
 		return pem.EncodeToMemory(block), nil
+	case *sm2.PrivateKey:
+		if k == nil {
+			return nil, errors.New("Invalid sm2 private key. It must be different from nil.")
+		}
+
+		return sm2.WritePrivateKeytoMem(k, pwd)
 
 	default:
-		return nil, errors.New("Invalid key type. It must be *ecdsa.PrivateKey")
+		return nil, errors.New("Invalid key type. It must be *ecdsa.PrivateKey or *sm2.PrivateKey")
 	}
 }
 
@@ -210,6 +227,15 @@ func PEMtoPrivateKey(raw []byte, pwd []byte) (interface{}, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("Invalid PEM. It must be different from nil.")
 	}
+
+	if key, err := pemToPrivateKey(raw, pwd); err == nil {
+		return key, nil
+	}
+
+	return sm2.ReadPrivateKeyFromMem(raw, pwd)
+}
+
+func pemToPrivateKey(raw []byte, pwd []byte) (interface{}, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil {
 		return nil, fmt.Errorf("Failed decoding PEM. Block must be different from nil. [% x]", raw)
@@ -283,6 +309,59 @@ func AEStoEncryptedPEM(raw []byte, pwd []byte) ([]byte, error) {
 	block, err := x509.EncryptPEMBlock(
 		rand.Reader,
 		"AES PRIVATE KEY",
+		raw,
+		pwd,
+		x509.PEMCipherAES256)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return pem.EncodeToMemory(block), nil
+}
+
+// PEMtoSM4 extracts from the PEM an Sm4 key
+func PEMtoSM4(raw []byte, pwd []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("Invalid PEM. It must be different from nil.")
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("Failed decoding PEM. Block must be different from nil. [% x]", raw)
+	}
+
+	if x509.IsEncryptedPEMBlock(block) {
+		if len(pwd) == 0 {
+			return nil, errors.New("Encrypted Key. Password must be different fom nil")
+		}
+
+		decrypted, err := x509.DecryptPEMBlock(block, pwd)
+		if err != nil {
+			return nil, fmt.Errorf("Failed PEM decryption. [%s]", err)
+		}
+		return decrypted, nil
+	}
+
+	return block.Bytes, nil
+}
+
+// SM4toPEM encapsulates an Sm4 key in the PEM format
+func SM4toPEM(raw []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "SM4 PRIVATE KEY", Bytes: raw})
+}
+
+// SM4toEncryptedPEM encapsulates an Sm4 key in the encrypted PEM format
+func SM4toEncryptedPEM(raw []byte, pwd []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("Invalid sm4 key. It must be different from nil")
+	}
+	if len(pwd) == 0 {
+		return SM4toPEM(raw), nil
+	}
+
+	block, err := x509.EncryptPEMBlock(
+		rand.Reader,
+		"SM4 PRIVATE KEY",
 		raw,
 		pwd,
 		x509.PEMCipherAES256)

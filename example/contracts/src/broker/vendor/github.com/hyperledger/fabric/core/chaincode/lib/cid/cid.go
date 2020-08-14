@@ -26,8 +26,10 @@ import (
 	"fmt"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/attrmgr"
 	"github.com/hyperledger/fabric/protos/msp"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
 	"github.com/pkg/errors"
 )
 
@@ -71,7 +73,7 @@ func AssertAttributeValue(stub ChaincodeStubInterface, attrName, attrValue strin
 
 // GetX509Certificate returns the X509 certificate associated with the client,
 // or nil if it was not identified by an X509 certificate.
-func GetX509Certificate(stub ChaincodeStubInterface) (*x509.Certificate, error) {
+func GetX509Certificate(stub ChaincodeStubInterface) (interface{}, error) {
 	c, err := New(stub)
 	if err != nil {
 		return nil, err
@@ -83,7 +85,7 @@ func GetX509Certificate(stub ChaincodeStubInterface) (*x509.Certificate, error) 
 type clientIdentityImpl struct {
 	stub  ChaincodeStubInterface
 	mspID string
-	cert  *x509.Certificate
+	cert  interface{}
 	attrs *attrmgr.Attributes
 }
 
@@ -102,8 +104,13 @@ func (c *clientIdentityImpl) GetID() (string, error) {
 	// The leading "x509::" distinguishes this as an X509 certificate, and
 	// the subject and issuer DNs uniquely identify the X509 certificate.
 	// The resulting ID will remain the same if the certificate is renewed.
-	id := fmt.Sprintf("x509::%s::%s", getDN(&c.cert.Subject), getDN(&c.cert.Issuer))
-	return base64.StdEncoding.EncodeToString([]byte(id)), nil
+	if factory.GetDefault().GetProviderName() == "SW" {
+		id := fmt.Sprintf("x509::%s::%s", getDN(&c.cert.(*x509.Certificate).Subject), getDN(&c.cert.(*x509.Certificate).Issuer))
+		return base64.StdEncoding.EncodeToString([]byte(id)), nil
+	} else {
+		id := fmt.Sprintf("x509::%s::%s", getDN(&c.cert.(*sm2.Certificate).Subject), getDN(&c.cert.(*sm2.Certificate).Issuer))
+		return base64.StdEncoding.EncodeToString([]byte(id)), nil
+	}
 }
 
 // GetMSPID returns the ID of the MSP associated with the identity that
@@ -137,7 +144,7 @@ func (c *clientIdentityImpl) AssertAttributeValue(attrName, attrValue string) er
 
 // GetX509Certificate returns the X509 certificate associated with the client,
 // or nil if it was not identified by an X509 certificate.
-func (c *clientIdentityImpl) GetX509Certificate() (*x509.Certificate, error) {
+func (c *clientIdentityImpl) GetX509Certificate() (interface{}, error) {
 	return c.cert, nil
 }
 
@@ -153,7 +160,12 @@ func (c *clientIdentityImpl) init() error {
 	if block == nil {
 		return errors.New("Expecting a PEM-encoded X509 certificate; PEM block not found")
 	}
-	cert, err := x509.ParseCertificate(block.Bytes)
+	var cert interface{}
+	if factory.GetDefault().GetProviderName() == "SW" {
+		cert, err = x509.ParseCertificate(block.Bytes)
+	} else {
+		cert, err = sm2.ParseCertificate(block.Bytes)
+	}
 	if err != nil {
 		return errors.Wrap(err, "failed to parse certificate")
 	}

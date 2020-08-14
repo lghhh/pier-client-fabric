@@ -98,6 +98,8 @@ type DecrypterOpts interface{}
 // BCCSP is the blockchain cryptographic service provider that offers
 // the implementation of cryptographic standards and algorithms.
 type BCCSP interface {
+	// GetProviderName return provider name.
+	GetProviderName() string
 
 	// KeyGen generates a key using opts.
 	KeyGen(opts KeyGenOpts) (k Key, err error)

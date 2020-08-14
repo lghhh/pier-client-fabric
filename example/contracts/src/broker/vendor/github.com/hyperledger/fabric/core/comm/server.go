@@ -17,6 +17,9 @@ import (
 	"time"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmtls"
 	"google.golang.org/grpc"
 )
 
@@ -36,9 +39,9 @@ type GRPCServer struct {
 	lock *sync.Mutex
 	// Set of PEM-encoded X509 certificate authorities used to populate
 	// the tlsConfig.ClientCAs indexed by subject
-	clientRootCAs map[string]*x509.Certificate
+	clientRootCAs map[string]interface{}
 	// TLS configuration used by the grpc server
-	tlsConfig *tls.Config
+	tls *TLSConfig
 }
 
 // NewGRPCServer creates a new implementation of a GRPCServer given a
@@ -76,56 +79,109 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 	if secureConfig.UseTLS {
 		//both key and cert are required
 		if secureConfig.Key != nil && secureConfig.Certificate != nil {
-			//load server public and private keys
-			cert, err := tls.X509KeyPair(secureConfig.Certificate, secureConfig.Key)
-			if err != nil {
-				return nil, err
-			}
-			grpcServer.serverCertificate.Store(cert)
-
-			//set up our TLS config
-			if len(secureConfig.CipherSuites) == 0 {
-				secureConfig.CipherSuites = DefaultTLSCipherSuites
-			}
-			getCert := func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				cert := grpcServer.serverCertificate.Load().(tls.Certificate)
-				return &cert, nil
-			}
-			//base server certificate
-			grpcServer.tlsConfig = &tls.Config{
-				VerifyPeerCertificate:  secureConfig.VerifyCertificate,
-				GetCertificate:         getCert,
-				SessionTicketsDisabled: true,
-				CipherSuites:           secureConfig.CipherSuites,
-			}
-
-			if serverConfig.SecOpts.TimeShift > 0 {
-				timeShift := serverConfig.SecOpts.TimeShift
-				grpcServer.tlsConfig.Time = func() time.Time {
-					return time.Now().Add((-1) * timeShift)
+			if factory.GetDefault().GetProviderName() == "SW" {
+				//load server public and private keys
+				cert, err := tls.X509KeyPair(secureConfig.Certificate, secureConfig.Key)
+				if err != nil {
+					return nil, err
 				}
-			}
-			grpcServer.tlsConfig.ClientAuth = tls.RequestClientCert
-			//check if client authentication is required
-			if secureConfig.RequireClientCert {
-				//require TLS client auth
-				grpcServer.tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-				//if we have client root CAs, create a certPool
-				if len(secureConfig.ClientRootCAs) > 0 {
-					grpcServer.clientRootCAs = make(map[string]*x509.Certificate)
-					grpcServer.tlsConfig.ClientCAs = x509.NewCertPool()
-					for _, clientRootCA := range secureConfig.ClientRootCAs {
-						err = grpcServer.appendClientRootCA(clientRootCA)
-						if err != nil {
-							return nil, err
+				grpcServer.serverCertificate.Store(cert)
+
+				//set up our TLS config
+				if len(secureConfig.CipherSuites) == 0 {
+					secureConfig.CipherSuites = DefaultTLSCipherSuites
+				}
+				getCert := func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					cert := grpcServer.serverCertificate.Load().(tls.Certificate)
+					return &cert, nil
+				}
+				//base server certificate
+				grpcServer.tls = NewTLSConfig(&tls.Config{
+					VerifyPeerCertificate:  secureConfig.VerifyCertificate,
+					GetCertificate:         getCert,
+					SessionTicketsDisabled: true,
+					CipherSuites:           secureConfig.CipherSuites,
+				})
+
+				if serverConfig.SecOpts.TimeShift > 0 {
+					timeShift := serverConfig.SecOpts.TimeShift
+					grpcServer.tls.config.(*tls.Config).Time = func() time.Time {
+						return time.Now().Add((-1) * timeShift)
+					}
+				}
+				grpcServer.tls.config.(*tls.Config).ClientAuth = tls.RequestClientCert
+				//check if client authentication is required
+				if secureConfig.RequireClientCert {
+					//require TLS client auth
+					grpcServer.tls.config.(*tls.Config).ClientAuth = tls.RequireAndVerifyClientCert
+					//if we have client root CAs, create a certPool
+					if len(secureConfig.ClientRootCAs) > 0 {
+						grpcServer.clientRootCAs = make(map[string]interface{})
+						grpcServer.tls.config.(*tls.Config).ClientCAs = x509.NewCertPool()
+						for _, clientRootCA := range secureConfig.ClientRootCAs {
+							err = grpcServer.appendClientRootCA(clientRootCA)
+							if err != nil {
+								return nil, err
+							}
 						}
 					}
 				}
-			}
 
-			// create credentials and add to server options
-			creds := NewServerTransportCredentials(grpcServer.tlsConfig, serverConfig.Logger)
-			serverOpts = append(serverOpts, grpc.Creds(creds))
+				// create credentials and add to server options
+				creds := NewServerTransportCredentials(grpcServer.tls, serverConfig.Logger)
+				serverOpts = append(serverOpts, grpc.Creds(creds))
+			} else {
+				//load server public and private keys
+				cert, err := gmtls.X509KeyPair(secureConfig.Certificate, secureConfig.Key)
+				if err != nil {
+					return nil, err
+				}
+				grpcServer.serverCertificate.Store(cert)
+
+				//set up our TLS config
+				if len(secureConfig.CipherSuites) == 0 {
+					secureConfig.CipherSuites = DefaultGMTLSCipherSuites
+				}
+				getCert := func(_ *gmtls.ClientHelloInfo) (*gmtls.Certificate, error) {
+					cert := grpcServer.serverCertificate.Load().(gmtls.Certificate)
+					return &cert, nil
+				}
+				//base server certificate
+				grpcServer.tls = NewTLSConfig(&gmtls.Config{
+					VerifyPeerCertificate:  secureConfig.VerifyGMCertificate,
+					GetCertificate:         getCert,
+					SessionTicketsDisabled: true,
+					CipherSuites:           secureConfig.CipherSuites,
+				})
+
+				if serverConfig.SecOpts.TimeShift > 0 {
+					timeShift := serverConfig.SecOpts.TimeShift
+					grpcServer.tls.config.(*gmtls.Config).Time = func() time.Time {
+						return time.Now().Add((-1) * timeShift)
+					}
+				}
+				grpcServer.tls.config.(*gmtls.Config).ClientAuth = gmtls.RequestClientCert
+				//check if client authentication is required
+				if secureConfig.RequireClientCert {
+					//require TLS client auth
+					grpcServer.tls.config.(*gmtls.Config).ClientAuth = gmtls.RequireAndVerifyClientCert
+					//if we have client root CAs, create a certPool
+					if len(secureConfig.ClientRootCAs) > 0 {
+						grpcServer.clientRootCAs = make(map[string]interface{})
+						grpcServer.tls.config.(*gmtls.Config).ClientCAs = sm2.NewCertPool()
+						for _, clientRootCA := range secureConfig.ClientRootCAs {
+							err = grpcServer.appendClientRootCA(clientRootCA)
+							if err != nil {
+								return nil, err
+							}
+						}
+					}
+				}
+
+				// create credentials and add to server options
+				creds := NewServerTransportCredentials(grpcServer.tls, serverConfig.Logger)
+				serverOpts = append(serverOpts, grpc.Creds(creds))
+			}
 		} else {
 			return nil, errors.New("serverConfig.SecOpts must contain both Key and Certificate when UseTLS is true")
 		}
@@ -166,7 +222,7 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 }
 
 // SetServerCertificate assigns the current TLS certificate to be the peer's server certificate
-func (gServer *GRPCServer) SetServerCertificate(cert tls.Certificate) {
+func (gServer *GRPCServer) SetServerCertificate(cert interface{}) {
 	gServer.serverCertificate.Store(cert)
 }
 
@@ -186,22 +242,28 @@ func (gServer *GRPCServer) Server() *grpc.Server {
 }
 
 // ServerCertificate returns the tls.Certificate used by the grpc.Server
-func (gServer *GRPCServer) ServerCertificate() tls.Certificate {
-	return gServer.serverCertificate.Load().(tls.Certificate)
+func (gServer *GRPCServer) ServerCertificate() interface{} {
+	return gServer.serverCertificate.Load()
 }
 
 // TLSEnabled is a flag indicating whether or not TLS is enabled for the
 // GRPCServer instance
 func (gServer *GRPCServer) TLSEnabled() bool {
-	return gServer.tlsConfig != nil
+	return gServer.tls != nil
 }
 
 // MutualTLSRequired is a flag indicating whether or not client certificates
 // are required for this GRPCServer instance
 func (gServer *GRPCServer) MutualTLSRequired() bool {
-	return gServer.tlsConfig != nil &&
-		gServer.tlsConfig.ClientAuth ==
-			tls.RequireAndVerifyClientCert
+	if factory.GetDefault().GetProviderName() == "SW" {
+		return gServer.TLSEnabled() &&
+			gServer.tls.Config().(tls.Config).ClientAuth ==
+				tls.RequireAndVerifyClientCert
+	} else {
+		return gServer.TLSEnabled() &&
+			gServer.tls.Config().(gmtls.Config).ClientAuth ==
+				gmtls.RequireAndVerifyClientCert
+	}
 }
 
 // Start starts the underlying grpc.Server
@@ -214,20 +276,6 @@ func (gServer *GRPCServer) Stop() {
 	gServer.server.Stop()
 }
 
-// AppendClientRootCAs appends PEM-encoded X509 certificate authorities to
-// the list of authorities used to verify client certificates
-func (gServer *GRPCServer) AppendClientRootCAs(clientRoots [][]byte) error {
-	gServer.lock.Lock()
-	defer gServer.lock.Unlock()
-	for _, clientRoot := range clientRoots {
-		err := gServer.appendClientRootCA(clientRoot)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // internal function to add a PEM-encoded clientRootCA
 func (gServer *GRPCServer) appendClientRootCA(clientRoot []byte) error {
 
@@ -238,15 +286,26 @@ func (gServer *GRPCServer) appendClientRootCA(clientRoot []byte) error {
 		return fmt.Errorf(errMsg, err.Error())
 	}
 
-	if len(certs) < 1 {
-		return fmt.Errorf(errMsg, "No client root certificates found")
-	}
-
-	for i, cert := range certs {
-		//first add to the ClientCAs
-		gServer.tlsConfig.ClientCAs.AddCert(cert)
-		//add it to our clientRootCAs map using subject as key
-		gServer.clientRootCAs[subjects[i]] = cert
+	if factory.GetDefault().GetProviderName() == "SW" {
+		if len(certs.([]*x509.Certificate)) < 1 {
+			return fmt.Errorf(errMsg, "No client root certificates found")
+		}
+		for i, cert := range certs.([]*x509.Certificate) {
+			//first add to the ClientCAs
+			gServer.tls.AddClientRootCA(cert)
+			//add it to our clientRootCAs map using subject as key
+			gServer.clientRootCAs[subjects[i]] = cert
+		}
+	} else {
+		if len(certs.([]*sm2.Certificate)) < 1 {
+			return fmt.Errorf(errMsg, "No client root certificates found")
+		}
+		for i, cert := range certs.([]*sm2.Certificate) {
+			//first add to the ClientCAs
+			gServer.tls.AddClientRootCA(cert)
+			//add it to our clientRootCAs map using subject as key
+			gServer.clientRootCAs[subjects[i]] = cert
+		}
 	}
 	return nil
 }
@@ -264,14 +323,23 @@ func (gServer *GRPCServer) RemoveClientRootCAs(clientRoots [][]byte) error {
 		}
 	}
 
-	//create a new CertPool and populate with current clientRootCAs
-	certPool := x509.NewCertPool()
-	for _, clientRoot := range gServer.clientRootCAs {
-		certPool.AddCert(clientRoot)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		//create a new CertPool and populate with current clientRootCAs
+		certPool := x509.NewCertPool()
+		for _, clientRoot := range gServer.clientRootCAs {
+			certPool.AddCert(clientRoot.(*x509.Certificate))
+		}
+		//replace the current ClientCAs pool
+		gServer.tls.SetClientCAs(certPool)
+	} else {
+		//create a new CertPool and populate with current clientRootCAs
+		certPool := sm2.NewCertPool()
+		for _, clientRoot := range gServer.clientRootCAs {
+			certPool.AddCert(clientRoot.(*sm2.Certificate))
+		}
+		//replace the current ClientCAs pool
+		gServer.tls.SetClientCAs(certPool)
 	}
-
-	//replace the current ClientCAs pool
-	gServer.tlsConfig.ClientCAs = certPool
 	return nil
 }
 
@@ -285,15 +353,27 @@ func (gServer *GRPCServer) removeClientRootCA(clientRoot []byte) error {
 		return fmt.Errorf(errMsg, err.Error())
 	}
 
-	if len(certs) < 1 {
-		return fmt.Errorf(errMsg, "No client root certificates found")
-	}
-
-	for i, subject := range subjects {
-		//remove it from our clientRootCAs map using subject as key
-		//check to see if we have match
-		if certs[i].Equal(gServer.clientRootCAs[subject]) {
-			delete(gServer.clientRootCAs, subject)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		if len(certs.([]*x509.Certificate)) < 1 {
+			return fmt.Errorf(errMsg, "No client root certificates found")
+		}
+		for i, subject := range subjects {
+			//remove it from our clientRootCAs map using subject as key
+			//check to see if we have match
+			if certs.([]*x509.Certificate)[i].Equal(gServer.clientRootCAs[subject].(*x509.Certificate)) {
+				delete(gServer.clientRootCAs, subject)
+			}
+		}
+	} else {
+		if len(certs.([]*sm2.Certificate)) < 1 {
+			return fmt.Errorf(errMsg, "No client root certificates found")
+		}
+		for i, subject := range subjects {
+			//remove it from our clientRootCAs map using subject as key
+			//check to see if we have match
+			if certs.([]*sm2.Certificate)[i].Equal(gServer.clientRootCAs[subject].(*sm2.Certificate)) {
+				delete(gServer.clientRootCAs, subject)
+			}
 		}
 	}
 	return nil
@@ -307,29 +387,54 @@ func (gServer *GRPCServer) SetClientRootCAs(clientRoots [][]byte) error {
 
 	errMsg := "Failed to set client root certificate(s): %s"
 
-	//create a new map and CertPool
-	clientRootCAs := make(map[string]*x509.Certificate)
-	for _, clientRoot := range clientRoots {
-		certs, subjects, err := pemToX509Certs(clientRoot)
-		if err != nil {
-			return fmt.Errorf(errMsg, err.Error())
-		}
-		if len(certs) >= 1 {
-			for i, cert := range certs {
-				//add it to our clientRootCAs map using subject as key
-				clientRootCAs[subjects[i]] = cert
+	if factory.GetDefault().GetProviderName() == "SW" {
+		//create a new map and CertPool
+		clientRootCAs := make(map[string]interface{})
+		for _, clientRoot := range clientRoots {
+			certs, subjects, err := pemToX509Certs(clientRoot)
+			if err != nil {
+				return fmt.Errorf(errMsg, err.Error())
+			}
+			if len(certs.([]*x509.Certificate)) >= 1 {
+				for i, cert := range certs.([]*x509.Certificate) {
+					//add it to our clientRootCAs map using subject as key
+					clientRootCAs[subjects[i]] = cert
+				}
 			}
 		}
+		//create a new CertPool and populate with the new clientRootCAs
+		certPool := x509.NewCertPool()
+		for _, clientRoot := range clientRootCAs {
+			certPool.AddCert(clientRoot.(*x509.Certificate))
+		}
+		//replace the internal map
+		gServer.clientRootCAs = clientRootCAs
+		//replace the current ClientCAs pool
+		gServer.tls.SetClientCAs(certPool)
+	} else {
+		//create a new map and CertPool
+		clientRootCAs := make(map[string]interface{})
+		for _, clientRoot := range clientRoots {
+			certs, subjects, err := pemToX509Certs(clientRoot)
+			if err != nil {
+				return fmt.Errorf(errMsg, err.Error())
+			}
+			if len(certs.([]*sm2.Certificate)) >= 1 {
+				for i, cert := range certs.([]*sm2.Certificate) {
+					//add it to our clientRootCAs map using subject as key
+					clientRootCAs[subjects[i]] = cert
+				}
+			}
+		}
+		//create a new CertPool and populate with the new clientRootCAs
+		certPool := sm2.NewCertPool()
+		for _, clientRoot := range clientRootCAs {
+			certPool.AddCert(clientRoot.(*sm2.Certificate))
+		}
+		//replace the internal map
+		gServer.clientRootCAs = clientRootCAs
+		//replace the current ClientCAs pool
+		gServer.tls.SetClientCAs(certPool)
 	}
-
-	//create a new CertPool and populate with the new clientRootCAs
-	certPool := x509.NewCertPool()
-	for _, clientRoot := range clientRootCAs {
-		certPool.AddCert(clientRoot)
-	}
-	//replace the internal map
-	gServer.clientRootCAs = clientRootCAs
-	//replace the current ClientCAs pool
-	gServer.tlsConfig.ClientCAs = certPool
 	return nil
 }

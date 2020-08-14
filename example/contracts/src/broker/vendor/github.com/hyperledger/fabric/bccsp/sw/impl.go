@@ -34,6 +34,8 @@ var (
 // Encryptor, Decryptor, Signer, Verifier, Hasher. Each wrapper is bound to a
 // goland type representing either an option or a key.
 type CSP struct {
+	providerName string
+
 	ks bccsp.KeyStore
 
 	KeyGenerators map[reflect.Type]KeyGenerator
@@ -60,11 +62,16 @@ func New(keyStore bccsp.KeyStore) (*CSP, error) {
 	keyDerivers := make(map[reflect.Type]KeyDeriver)
 	keyImporters := make(map[reflect.Type]KeyImporter)
 
-	csp := &CSP{keyStore,
+	csp := &CSP{"SW", keyStore,
 		keyGenerators, keyDerivers, keyImporters, encryptors,
 		decryptors, signers, verifiers, hashers}
 
 	return csp, nil
+}
+
+// GetProviderName return provider name.
+func (csp *CSP) GetProviderName() string {
+	return csp.providerName
 }
 
 // KeyGen generates a key using opts.

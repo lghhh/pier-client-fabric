@@ -7,8 +7,11 @@ package handlers
 
 import (
 	"crypto/sha256"
+	"hash"
 
 	"github.com/hyperledger/fabric/bccsp"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm3"
 	"github.com/pkg/errors"
 )
 
@@ -30,10 +33,14 @@ func computeSKI(serialise func() ([]byte, error)) ([]byte, error) {
 		return nil, err
 	}
 
-	hash := sha256.New()
+	var hash hash.Hash
+	if factory.GetDefault().GetProviderName() == "SW" {
+		hash = sha256.New()
+	} else {
+		hash = sm3.New()
+	}
 	hash.Write(raw)
 	return hash.Sum(nil), nil
-
 }
 
 func NewNymSecretKey(sk Big, pk Ecp, exportable bool) (*nymSecretKey, error) {

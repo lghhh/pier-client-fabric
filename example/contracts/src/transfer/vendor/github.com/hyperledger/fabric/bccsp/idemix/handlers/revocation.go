@@ -15,6 +15,9 @@ import (
 	"reflect"
 
 	"github.com/hyperledger/fabric/bccsp"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm3"
 	"github.com/pkg/errors"
 )
 
@@ -22,12 +25,12 @@ import (
 // and implements the bccsp.Key interface
 type revocationSecretKey struct {
 	// sk is the idemix reference to the revocation key
-	privKey *ecdsa.PrivateKey
+	privKey interface{}
 	// exportable if true, sk can be exported via the Bytes function
 	exportable bool
 }
 
-func NewRevocationSecretKey(sk *ecdsa.PrivateKey, exportable bool) *revocationSecretKey {
+func NewRevocationSecretKey(sk interface{}, exportable bool) *revocationSecretKey {
 	return &revocationSecretKey{privKey: sk, exportable: exportable}
 }
 
@@ -35,7 +38,11 @@ func NewRevocationSecretKey(sk *ecdsa.PrivateKey, exportable bool) *revocationSe
 // if this operation is allowed.
 func (k *revocationSecretKey) Bytes() ([]byte, error) {
 	if k.exportable {
-		return k.privKey.D.Bytes(), nil
+		if factory.GetDefault().GetProviderName() == "SW" {
+			return k.privKey.(*ecdsa.PrivateKey).D.Bytes(), nil
+		} else {
+			return k.privKey.(*sm2.PrivateKey).D.Bytes(), nil
+		}
 	}
 
 	return nil, errors.New("not exportable")
@@ -43,13 +50,21 @@ func (k *revocationSecretKey) Bytes() ([]byte, error) {
 
 // SKI returns the subject key identifier of this key.
 func (k *revocationSecretKey) SKI() []byte {
-	// Marshall the public key
-	raw := elliptic.Marshal(k.privKey.Curve, k.privKey.PublicKey.X, k.privKey.PublicKey.Y)
-
-	// Hash it
-	hash := sha256.New()
-	hash.Write(raw)
-	return hash.Sum(nil)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		// Marshall the public key
+		raw := elliptic.Marshal(k.privKey.(*ecdsa.PrivateKey).Curve, k.privKey.(*ecdsa.PrivateKey).PublicKey.X, k.privKey.(*ecdsa.PrivateKey).PublicKey.Y)
+		// Hash it
+		hash := sha256.New()
+		hash.Write(raw)
+		return hash.Sum(nil)
+	} else {
+		// Marshall the public key
+		raw := elliptic.Marshal(k.privKey.(*sm2.PrivateKey).Curve, k.privKey.(*sm2.PrivateKey).PublicKey.X, k.privKey.(*sm2.PrivateKey).PublicKey.Y)
+		// Hash it
+		hash := sm3.New()
+		hash.Write(raw)
+		return hash.Sum(nil)
+	}
 }
 
 // Symmetric returns true if this key is a symmetric key,
@@ -67,21 +82,30 @@ func (k *revocationSecretKey) Private() bool {
 // PublicKey returns the corresponding public key part of an asymmetric public/private key pair.
 // This method returns an error in symmetric key schemes.
 func (k *revocationSecretKey) PublicKey() (bccsp.Key, error) {
-	return &revocationPublicKey{&k.privKey.PublicKey}, nil
+	if factory.GetDefault().GetProviderName() == "SW" {
+		return &revocationPublicKey{&k.privKey.(*ecdsa.PrivateKey).PublicKey}, nil
+	} else {
+		return &revocationPublicKey{&k.privKey.(*sm2.PrivateKey).PublicKey}, nil
+	}
+
 }
 
 type revocationPublicKey struct {
-	pubKey *ecdsa.PublicKey
+	pubKey interface{}
 }
 
-func NewRevocationPublicKey(pubKey *ecdsa.PublicKey) *revocationPublicKey {
+func NewRevocationPublicKey(pubKey interface{}) *revocationPublicKey {
 	return &revocationPublicKey{pubKey: pubKey}
 }
 
 // Bytes converts this key to its byte representation,
 // if this operation is allowed.
 func (k *revocationPublicKey) Bytes() (raw []byte, err error) {
-	raw, err = x509.MarshalPKIXPublicKey(k.pubKey)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		raw, err = x509.MarshalPKIXPublicKey(k.pubKey)
+	} else {
+		raw, err = sm2.MarshalPKIXPublicKey(k.pubKey)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Failed marshalling key [%s]", err)
 	}
@@ -90,13 +114,21 @@ func (k *revocationPublicKey) Bytes() (raw []byte, err error) {
 
 // SKI returns the subject key identifier of this key.
 func (k *revocationPublicKey) SKI() []byte {
-	// Marshall the public key
-	raw := elliptic.Marshal(k.pubKey.Curve, k.pubKey.X, k.pubKey.Y)
-
-	// Hash it
-	hash := sha256.New()
-	hash.Write(raw)
-	return hash.Sum(nil)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		// Marshall the public key
+		raw := elliptic.Marshal(k.pubKey.(*ecdsa.PublicKey).Curve, k.pubKey.(*ecdsa.PublicKey).X, k.pubKey.(*ecdsa.PublicKey).Y)
+		// Hash it
+		hash := sha256.New()
+		hash.Write(raw)
+		return hash.Sum(nil)
+	} else {
+		// Marshall the public key
+		raw := elliptic.Marshal(k.pubKey.(*sm2.PublicKey).Curve, k.pubKey.(*sm2.PublicKey).X, k.pubKey.(*sm2.PublicKey).Y)
+		// Hash it
+		hash := sm3.New()
+		hash.Write(raw)
+		return hash.Sum(nil)
+	}
 }
 
 // Symmetric returns true if this key is a symmetric key,
@@ -152,18 +184,29 @@ func (i *RevocationPublicKeyImporter) KeyImport(raw interface{}, opts bccsp.KeyI
 
 	blockPub, _ := pem.Decode(raw.([]byte))
 	if blockPub == nil {
-		return nil, errors.New("Failed to decode revocation ECDSA public key")
+		return nil, errors.New("Failed to decode revocation ECDSA or SM2 public key")
 	}
-	revocationPk, err := x509.ParsePKIXPublicKey(blockPub.Bytes)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to parse revocation ECDSA public key bytes")
+	if factory.GetDefault().GetProviderName() == "SW" {
+		revocationPk, err := x509.ParsePKIXPublicKey(blockPub.Bytes)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to parse revocation ECDSA public key bytes")
+		}
+		ecdsaPublicKey, isECDSA := revocationPk.(*ecdsa.PublicKey)
+		if !isECDSA {
+			return nil, errors.Errorf("key is of type %v, not of type ECDSA", reflect.TypeOf(revocationPk))
+		}
+		return &revocationPublicKey{ecdsaPublicKey}, nil
+	} else {
+		revocationPk, err := sm2.ParsePKIXPublicKey(blockPub.Bytes)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to parse revocation SM2 public key bytes")
+		}
+		sm2PublicKey, isSM2 := revocationPk.(*sm2.PublicKey)
+		if !isSM2 {
+			return nil, errors.Errorf("key is of type %v, not of type SM2", reflect.TypeOf(revocationPk))
+		}
+		return &revocationPublicKey{sm2PublicKey}, nil
 	}
-	ecdsaPublicKey, isECDSA := revocationPk.(*ecdsa.PublicKey)
-	if !isECDSA {
-		return nil, errors.Errorf("key is of type %v, not of type ECDSA", reflect.TypeOf(revocationPk))
-	}
-
-	return &revocationPublicKey{ecdsaPublicKey}, nil
 }
 
 type CriSigner struct {

@@ -138,7 +138,24 @@ func Start(cc Chaincode) error {
 		return errors.New("error chaincode id not provided")
 	}
 
-	err := factory.InitFactories(factory.GetDefaultOpts())
+	var err error
+	if viper.GetString("chaincode.bccsp") == "SW" {
+		err = factory.InitFactories(&factory.FactoryOpts{
+			ProviderName: "SW",
+			SwOpts: &factory.SwOpts{
+				HashFamily: "SHA2",
+				SecLevel:   256,
+			},
+		})
+	} else {
+		err = factory.InitFactories(&factory.FactoryOpts{
+			ProviderName: "GM",
+			SwOpts: &factory.SwOpts{
+				HashFamily: "SM3",
+				SecLevel:   256,
+			},
+		})
+	}
 	if err != nil {
 		return errors.WithMessage(err, "internal error, BCCSP could not be initialized with default options")
 	}

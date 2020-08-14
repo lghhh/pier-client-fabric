@@ -9,6 +9,7 @@ package utils
 import (
 	"bytes"
 	"fmt"
+	"hash"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/bccsp"
@@ -404,7 +405,13 @@ func GetProposalHash2(header *common.Header, ccPropPayl []byte) ([]byte, error) 
 		return nil, errors.New("nil arguments")
 	}
 
-	hash, err := factory.GetDefault().GetHash(&bccsp.SHA256Opts{})
+	var hash hash.Hash
+	var err error
+	if factory.GetDefault().GetProviderName() == "SW" {
+		hash, err = factory.GetDefault().GetHash(&bccsp.SHA256Opts{})
+	} else {
+		hash, err = factory.GetDefault().GetHash(&bccsp.SM3Opts{})
+	}
 	if err != nil {
 		return nil, errors.WithMessage(err, "error instantiating hash function")
 	}
@@ -439,7 +446,12 @@ func GetProposalHash1(header *common.Header, ccPropPayl []byte, visibility []byt
 		return nil, err
 	}
 
-	hash2, err := factory.GetDefault().GetHash(&bccsp.SHA256Opts{})
+	var hash2 hash.Hash
+	if factory.GetDefault().GetProviderName() == "SW" {
+		hash2, err = factory.GetDefault().GetHash(&bccsp.SHA256Opts{})
+	} else {
+		hash2, err = factory.GetDefault().GetHash(&bccsp.SM3Opts{})
+	}
 	if err != nil {
 		return nil, errors.WithMessage(err, "error instantiating hash function")
 	}

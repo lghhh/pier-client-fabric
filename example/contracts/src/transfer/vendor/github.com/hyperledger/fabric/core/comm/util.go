@@ -14,51 +14,89 @@ import (
 	"encoding/pem"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm3"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmtls/gmcredentials"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 )
 
 // AddPemToCertPool adds PEM-encoded certs to a cert pool
-func AddPemToCertPool(pemCerts []byte, pool *x509.CertPool) error {
+func AddPemToCertPool(pemCerts []byte, pool interface{}) error {
 	certs, _, err := pemToX509Certs(pemCerts)
 	if err != nil {
 		return err
 	}
-	for _, cert := range certs {
-		pool.AddCert(cert)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		for _, cert := range certs.([]*x509.Certificate) {
+			pool.(*x509.CertPool).AddCert(cert)
+		}
+	} else {
+		for _, cert := range certs.([]*sm2.Certificate) {
+			pool.(*sm2.CertPool).AddCert(cert)
+		}
 	}
 	return nil
 }
 
 //utility function to parse PEM-encoded certs
-func pemToX509Certs(pemCerts []byte) ([]*x509.Certificate, []string, error) {
+func pemToX509Certs(pemCerts []byte) (interface{}, []string, error) {
 
-	//it's possible that multiple certs are encoded
-	certs := []*x509.Certificate{}
-	subjects := []string{}
-	for len(pemCerts) > 0 {
-		var block *pem.Block
-		block, pemCerts = pem.Decode(pemCerts)
-		if block == nil {
-			break
-		}
-		/** TODO: check why msp does not add type to PEM header
-		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-			continue
-		}
-		*/
+	if factory.GetDefault().GetProviderName() == "SW" {
+		//it's possible that multiple certs are encoded
+		certs := []*x509.Certificate{}
+		subjects := []string{}
+		for len(pemCerts) > 0 {
+			var block *pem.Block
+			block, pemCerts = pem.Decode(pemCerts)
+			if block == nil {
+				break
+			}
+			/** TODO: check why msp does not add type to PEM header
+			if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+				continue
+			}
+			*/
 
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, subjects, err
-		} else {
-			certs = append(certs, cert)
-			//extract and append the subject
-			subjects = append(subjects, string(cert.RawSubject))
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, subjects, err
+			} else {
+				certs = append(certs, cert)
+				//extract and append the subject
+				subjects = append(subjects, string(cert.RawSubject))
+			}
 		}
+		return certs, subjects, nil
+	} else {
+		//it's possible that multiple certs are encoded
+		certs := []*sm2.Certificate{}
+		subjects := []string{}
+		for len(pemCerts) > 0 {
+			var block *pem.Block
+			block, pemCerts = pem.Decode(pemCerts)
+			if block == nil {
+				break
+			}
+			/** TODO: check why msp does not add type to PEM header
+			if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+				continue
+			}
+			*/
+
+			cert, err := sm2.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, subjects, err
+			} else {
+				certs = append(certs, cert)
+				//extract and append the subject
+				subjects = append(subjects, string(cert.RawSubject))
+			}
+		}
+		return certs, subjects, nil
 	}
-	return certs, subjects, nil
 }
 
 // BindingInspector receives as parameters a gRPC context and an Envelope,
@@ -119,14 +157,20 @@ func ExtractCertificateHashFromContext(ctx context.Context) []byte {
 	if len(rawCert) == 0 {
 		return nil
 	}
-	h := sha256.New()
-	h.Write(rawCert)
-	return h.Sum(nil)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		h := sha256.New()
+		h.Write(rawCert)
+		return h.Sum(nil)
+	} else {
+		h := sm3.New()
+		h.Write(rawCert)
+		return h.Sum(nil)
+	}
 }
 
 // ExtractCertificateFromContext returns the TLS certificate (if applicable)
 // from the given context of a gRPC stream
-func ExtractCertificateFromContext(ctx context.Context) *x509.Certificate {
+func ExtractCertificateFromContext(ctx context.Context) interface{} {
 	pr, extracted := peer.FromContext(ctx)
 	if !extracted {
 		return nil
@@ -137,15 +181,27 @@ func ExtractCertificateFromContext(ctx context.Context) *x509.Certificate {
 		return nil
 	}
 
-	tlsInfo, isTLSConn := authInfo.(credentials.TLSInfo)
-	if !isTLSConn {
-		return nil
+	if factory.GetDefault().GetProviderName() == "SW" {
+		tlsInfo, isTLSConn := authInfo.(credentials.TLSInfo)
+		if !isTLSConn {
+			return nil
+		}
+		certs := tlsInfo.State.PeerCertificates
+		if len(certs) == 0 {
+			return nil
+		}
+		return certs[0]
+	} else {
+		tlsInfo, isTLSConn := authInfo.(gmcredentials.TLSInfo)
+		if !isTLSConn {
+			return nil
+		}
+		certs := tlsInfo.State.PeerCertificates
+		if len(certs) == 0 {
+			return nil
+		}
+		return certs[0]
 	}
-	certs := tlsInfo.State.PeerCertificates
-	if len(certs) == 0 {
-		return nil
-	}
-	return certs[0]
 }
 
 // ExtractRawCertificateFromContext returns the raw TLS certificate (if applicable)
@@ -155,5 +211,9 @@ func ExtractRawCertificateFromContext(ctx context.Context) []byte {
 	if cert == nil {
 		return nil
 	}
-	return cert.Raw
+	if factory.GetDefault().GetProviderName() == "SW" {
+		return cert.(*x509.Certificate).Raw
+	} else {
+		return cert.(*sm2.Certificate).Raw
+	}
 }

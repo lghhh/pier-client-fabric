@@ -18,7 +18,9 @@ import (
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/bccsp/signer"
+	"github.com/hyperledger/fabric/bccsp/utils"
 	m "github.com/hyperledger/fabric/protos/msp"
+	"github.com/hyperledger/fabric/third_party/github.com/tjfoc/gmsm/sm2"
 	"github.com/pkg/errors"
 )
 
@@ -84,7 +86,7 @@ type bccspmsp struct {
 	name string
 
 	// verification options for MSP members
-	opts *x509.VerifyOptions
+	opts interface{}
 
 	// list of certificate revocation lists
 	CRL []*pkix.CertificateList
@@ -141,7 +143,7 @@ func newBccspMsp(version MSPVersion) (MSP, error) {
 	return theMsp, nil
 }
 
-func (msp *bccspmsp) getCertFromPem(idBytes []byte) (*x509.Certificate, error) {
+func (msp *bccspmsp) getCertFromPem(idBytes []byte) (interface{}, error) {
 	if idBytes == nil {
 		return nil, errors.New("getCertFromPem error: nil idBytes")
 	}
@@ -153,8 +155,13 @@ func (msp *bccspmsp) getCertFromPem(idBytes []byte) (*x509.Certificate, error) {
 	}
 
 	// get a cert
-	var cert *x509.Certificate
-	cert, err := x509.ParseCertificate(pemCert.Bytes)
+	var cert interface{}
+	var err error
+	if factory.GetDefault().GetProviderName() == "SW" {
+		cert, err = x509.ParseCertificate(pemCert.Bytes)
+	} else {
+		cert, err = sm2.ParseCertificate(pemCert.Bytes)
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "getCertFromPem error: failed to parse x509 cert")
 	}
@@ -382,7 +389,13 @@ func (msp *bccspmsp) deserializeIdentityInternal(serializedIdentity []byte) (Ide
 	if bl == nil {
 		return nil, errors.New("could not decode the PEM structure")
 	}
-	cert, err := x509.ParseCertificate(bl.Bytes)
+	var cert interface{}
+	var err error
+	if factory.GetDefault().GetProviderName() == "SW" {
+		cert, err = x509.ParseCertificate(bl.Bytes)
+	} else {
+		cert, err = sm2.ParseCertificate(bl.Bytes)
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "parseCertificate failed")
 	}
@@ -511,8 +524,14 @@ func (msp *bccspmsp) satisfiesPrincipalInternalPreV13(id Identity, principal *m.
 			return errors.WithMessage(err, "invalid identity principal, not a certificate")
 		}
 
-		if bytes.Equal(id.(*identity).cert.Raw, principalId.(*identity).cert.Raw) {
-			return principalId.Validate()
+		if factory.GetDefault().GetProviderName() == "SW" {
+			if bytes.Equal(id.(*identity).cert.(*x509.Certificate).Raw, principalId.(*identity).cert.(*x509.Certificate).Raw) {
+				return principalId.Validate()
+			}
+		} else {
+			if bytes.Equal(id.(*identity).cert.(*sm2.Certificate).Raw, principalId.(*identity).cert.(*sm2.Certificate).Raw) {
+				return principalId.Validate()
+			}
 		}
 
 		return errors.New("The identities do not match")
@@ -649,19 +668,30 @@ func (msp *bccspmsp) satisfiesPrincipalInternalV143(id Identity, principal *m.MS
 }
 
 func (msp *bccspmsp) isInAdmins(id *identity) bool {
-	for _, admincert := range msp.admins {
-		if bytes.Equal(id.cert.Raw, admincert.(*identity).cert.Raw) {
-			// we do not need to check whether the admin is a valid identity
-			// according to this MSP, since we already check this at Setup time
-			// if there is a match, we can just return
-			return true
+	if factory.GetDefault().GetProviderName() == "SW" {
+		for _, admincert := range msp.admins {
+			if bytes.Equal(id.cert.(*x509.Certificate).Raw, admincert.(*identity).cert.(*x509.Certificate).Raw) {
+				// we do not need to check whether the admin is a valid identity
+				// according to this MSP, since we already check this at Setup time
+				// if there is a match, we can just return
+				return true
+			}
+		}
+	} else {
+		for _, admincert := range msp.admins {
+			if bytes.Equal(id.cert.(*sm2.Certificate).Raw, admincert.(*identity).cert.(*sm2.Certificate).Raw) {
+				// we do not need to check whether the admin is a valid identity
+				// according to this MSP, since we already check this at Setup time
+				// if there is a match, we can just return
+				return true
+			}
 		}
 	}
 	return false
 }
 
 // getCertificationChain returns the certification chain of the passed identity within this msp
-func (msp *bccspmsp) getCertificationChain(id Identity) ([]*x509.Certificate, error) {
+func (msp *bccspmsp) getCertificationChain(id Identity) (interface{}, error) {
 	mspLogger.Debugf("MSP %s getting certification chain", msp.name)
 
 	switch id := id.(type) {
@@ -676,7 +706,7 @@ func (msp *bccspmsp) getCertificationChain(id Identity) ([]*x509.Certificate, er
 }
 
 // getCertificationChainForBCCSPIdentity returns the certification chain of the passed bccsp identity within this msp
-func (msp *bccspmsp) getCertificationChainForBCCSPIdentity(id *identity) ([]*x509.Certificate, error) {
+func (msp *bccspmsp) getCertificationChainForBCCSPIdentity(id *identity) (interface{}, error) {
 	if id == nil {
 		return nil, errors.New("Invalid bccsp identity. Must be different from nil.")
 	}
@@ -687,55 +717,92 @@ func (msp *bccspmsp) getCertificationChainForBCCSPIdentity(id *identity) ([]*x50
 	}
 
 	// CAs cannot be directly used as identities..
-	if id.cert.IsCA {
-		return nil, errors.New("An X509 certificate with Basic Constraint: " +
-			"Certificate Authority equals true cannot be used as an identity")
+	if factory.GetDefault().GetProviderName() == "SW" {
+		if id.cert.(*x509.Certificate).IsCA {
+			return nil, errors.New("An X509 certificate with Basic Constraint: " +
+				"Certificate Authority equals true cannot be used as an identity")
+		}
+	} else {
+		if id.cert.(*sm2.Certificate).IsCA {
+			return nil, errors.New("An X509 certificate with Basic Constraint: " +
+				"Certificate Authority equals true cannot be used as an identity")
+		}
 	}
 
 	return msp.getValidationChain(id.cert, false)
 }
 
-func (msp *bccspmsp) getUniqueValidationChain(cert *x509.Certificate, opts x509.VerifyOptions) ([]*x509.Certificate, error) {
+func (msp *bccspmsp) getUniqueValidationChain(cert interface{}, opts interface{}) (interface{}, error) {
 	// ask golang to validate the cert for us based on the options that we've built at setup time
 	if msp.opts == nil {
 		return nil, errors.New("the supplied identity has no verify options")
 	}
-	validationChains, err := cert.Verify(opts)
-	if err != nil {
-		return nil, errors.WithMessage(err, "the supplied identity is not valid")
+	if factory.GetDefault().GetProviderName() == "SW" {
+		validationChains, err := cert.(*x509.Certificate).Verify(opts.(x509.VerifyOptions))
+		if err != nil {
+			return nil, errors.WithMessage(err, "the supplied identity is not valid")
+		}
+		// we only support a single validation chain;
+		// if there's more than one then there might
+		// be unclarity about who owns the identity
+		if len(validationChains) != 1 {
+			return nil, errors.Errorf("this MSP only supports a single validation chain, got %d", len(validationChains))
+		}
+		return validationChains[0], nil
+	} else {
+		validationChains, err := cert.(*sm2.Certificate).Verify(opts.(sm2.VerifyOptions))
+		if err != nil {
+			return nil, errors.WithMessage(err, "the supplied identity is not valid")
+		}
+		// we only support a single validation chain;
+		// if there's more than one then there might
+		// be unclarity about who owns the identity
+		if len(validationChains) != 1 {
+			return nil, errors.Errorf("this MSP only supports a single validation chain, got %d", len(validationChains))
+		}
+		return validationChains[0], nil
 	}
-
-	// we only support a single validation chain;
-	// if there's more than one then there might
-	// be unclarity about who owns the identity
-	if len(validationChains) != 1 {
-		return nil, errors.Errorf("this MSP only supports a single validation chain, got %d", len(validationChains))
-	}
-
-	return validationChains[0], nil
 }
 
-func (msp *bccspmsp) getValidationChain(cert *x509.Certificate, isIntermediateChain bool) ([]*x509.Certificate, error) {
+func (msp *bccspmsp) getValidationChain(cert interface{}, isIntermediateChain bool) (interface{}, error) {
 	validationChain, err := msp.getUniqueValidationChain(cert, msp.getValidityOptsForCert(cert))
 	if err != nil {
 		return nil, errors.WithMessage(err, "failed getting validation chain")
 	}
 
-	// we expect a chain of length at least 2
-	if len(validationChain) < 2 {
-		return nil, errors.Errorf("expected a chain of length at least 2, got %d", len(validationChain))
-	}
+	if factory.GetDefault().GetProviderName() == "SW" {
+		// we expect a chain of length at least 2
+		if len(validationChain.([]*x509.Certificate)) < 2 {
+			return nil, errors.Errorf("expected a chain of length at least 2, got %d", len(validationChain.([]*x509.Certificate)))
+		}
 
-	// check that the parent is a leaf of the certification tree
-	// if validating an intermediate chain, the first certificate will the parent
-	parentPosition := 1
-	if isIntermediateChain {
-		parentPosition = 0
+		// check that the parent is a leaf of the certification tree
+		// if validating an intermediate chain, the first certificate will the parent
+		parentPosition := 1
+		if isIntermediateChain {
+			parentPosition = 0
+		}
+		if msp.certificationTreeInternalNodesMap[string(validationChain.([]*x509.Certificate)[parentPosition].Raw)] {
+			return nil, errors.Errorf("invalid validation chain. Parent certificate should be a leaf of the certification tree [%v]", cert.(*x509.Certificate).Raw)
+		}
+		return validationChain, nil
+	} else {
+		// we expect a chain of length at least 2
+		if len(validationChain.([]*sm2.Certificate)) < 2 {
+			return nil, errors.Errorf("expected a chain of length at least 2, got %d", len(validationChain.([]*sm2.Certificate)))
+		}
+
+		// check that the parent is a leaf of the certification tree
+		// if validating an intermediate chain, the first certificate will the parent
+		parentPosition := 1
+		if isIntermediateChain {
+			parentPosition = 0
+		}
+		if msp.certificationTreeInternalNodesMap[string(validationChain.([]*sm2.Certificate)[parentPosition].Raw)] {
+			return nil, errors.Errorf("invalid validation chain. Parent certificate should be a leaf of the certification tree [%v]", cert.(*sm2.Certificate).Raw)
+		}
+		return validationChain, nil
 	}
-	if msp.certificationTreeInternalNodesMap[string(validationChain[parentPosition].Raw)] {
-		return nil, errors.Errorf("invalid validation chain. Parent certificate should be a leaf of the certification tree [%v]", cert.Raw)
-	}
-	return validationChain, nil
 }
 
 // getCertificationChainIdentifier returns the certification chain identifier of the passed identity within this msp.
@@ -748,10 +815,14 @@ func (msp *bccspmsp) getCertificationChainIdentifier(id Identity) ([]byte, error
 
 	// chain[0] is the certificate representing the identity.
 	// It will be discarded
-	return msp.getCertificationChainIdentifierFromChain(chain[1:])
+	if factory.GetDefault().GetProviderName() == "SW" {
+		return msp.getCertificationChainIdentifierFromChain(chain.([]*x509.Certificate)[1:])
+	} else {
+		return msp.getCertificationChainIdentifierFromChain(chain.([]*sm2.Certificate)[1:])
+	}
 }
 
-func (msp *bccspmsp) getCertificationChainIdentifierFromChain(chain []*x509.Certificate) ([]byte, error) {
+func (msp *bccspmsp) getCertificationChainIdentifierFromChain(chain interface{}) ([]byte, error) {
 	// Hash the chain
 	// Use the hash of the identity's certificate as id in the IdentityIdentifier
 	hashOpt, err := bccsp.GetHashOpt(msp.cryptoConfig.IdentityIdentifierHashFunction)
@@ -763,8 +834,16 @@ func (msp *bccspmsp) getCertificationChainIdentifierFromChain(chain []*x509.Cert
 	if err != nil {
 		return nil, errors.WithMessage(err, "failed getting hash function when computing certification chain identifier")
 	}
-	for i := 0; i < len(chain); i++ {
-		hf.Write(chain[i].Raw)
+	if factory.GetDefault().GetProviderName() == "SW" {
+		c := chain.([]*x509.Certificate)
+		for i := 0; i < len(c); i++ {
+			hf.Write(c[i].Raw)
+		}
+	} else {
+		c := chain.([]*sm2.Certificate)
+		for i := 0; i < len(c); i++ {
+			hf.Write(c[i].Raw)
+		}
 	}
 	return hf.Sum(nil), nil
 }
@@ -772,28 +851,52 @@ func (msp *bccspmsp) getCertificationChainIdentifierFromChain(chain []*x509.Cert
 // sanitizeCert ensures that x509 certificates signed using ECDSA
 // do have signatures in Low-S. If this is not the case, the certificate
 // is regenerated to have a Low-S signature.
-func (msp *bccspmsp) sanitizeCert(cert *x509.Certificate) (*x509.Certificate, error) {
+func (msp *bccspmsp) sanitizeCert(cert interface{}) (interface{}, error) {
 	if isECDSASignedCert(cert) {
-		// Lookup for a parent certificate to perform the sanitization
-		var parentCert *x509.Certificate
-		chain, err := msp.getUniqueValidationChain(cert, msp.getValidityOptsForCert(cert))
-		if err != nil {
-			return nil, err
-		}
+		if factory.GetDefault().GetProviderName() == "SW" {
+			// Lookup for a parent certificate to perform the sanitization
+			var parentCert *x509.Certificate
+			chain, err := msp.getUniqueValidationChain(cert, msp.getValidityOptsForCert(cert.(*x509.Certificate)))
+			if err != nil {
+				return nil, err
+			}
 
-		// at this point, cert might be a root CA certificate
-		// or an intermediate CA certificate
-		if cert.IsCA && len(chain) == 1 {
-			// cert is a root CA certificate
-			parentCert = cert
+			// at this point, cert might be a root CA certificate
+			// or an intermediate CA certificate
+			if cert.(*x509.Certificate).IsCA && len(chain.([]*x509.Certificate)) == 1 {
+				// cert is a root CA certificate
+				parentCert = cert.(*x509.Certificate)
+			} else {
+				parentCert = chain.([]*x509.Certificate)[1]
+			}
+
+			// Sanitize
+			cert, err = sanitizeECDSASignedCert(cert.(*x509.Certificate), parentCert)
+			if err != nil {
+				return nil, err
+			}
 		} else {
-			parentCert = chain[1]
-		}
+			// Lookup for a parent certificate to perform the sanitization
+			var parentCert *sm2.Certificate
+			chain, err := msp.getUniqueValidationChain(cert, msp.getValidityOptsForCert(cert.(*sm2.Certificate)))
+			if err != nil {
+				return nil, err
+			}
 
-		// Sanitize
-		cert, err = sanitizeECDSASignedCert(cert, parentCert)
-		if err != nil {
-			return nil, err
+			// at this point, cert might be a root CA certificate
+			// or an intermediate CA certificate
+			if cert.(*sm2.Certificate).IsCA && len(chain.([]*sm2.Certificate)) == 1 {
+				// cert is a root CA certificate
+				parentCert = cert.(*sm2.Certificate)
+			} else {
+				parentCert = chain.([]*sm2.Certificate)[1]
+			}
+
+			// Sanitize
+			cert, err = sanitizeSM2SignedCert(cert.(*sm2.Certificate), parentCert)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return cert, nil
@@ -803,10 +906,14 @@ func (msp *bccspmsp) sanitizeCert(cert *x509.Certificate) (*x509.Certificate, er
 // In this MSP implementation, well formed means that the PEM has a Type which is either
 // the string 'CERTIFICATE' or the Type is missing altogether.
 func (msp *bccspmsp) IsWellFormed(identity *m.SerializedIdentity) error {
-	bl, _ := pem.Decode(identity.IdBytes)
+	bl, rest := pem.Decode(identity.IdBytes)
 	if bl == nil {
 		return errors.New("PEM decoding resulted in an empty block")
 	}
+	if len(rest) > 0 {
+		return errors.Errorf("identity %s for MSP %s has trailing bytes", string(identity.IdBytes), identity.Mspid)
+	}
+
 	// Important: This method looks very similar to getCertFromPem(idBytes []byte) (*x509.Certificate, error)
 	// But we:
 	// 1) Must ensure PEM block is of type CERTIFICATE or is empty
@@ -815,6 +922,36 @@ func (msp *bccspmsp) IsWellFormed(identity *m.SerializedIdentity) error {
 	if bl.Type != "CERTIFICATE" && bl.Type != "" {
 		return errors.Errorf("pem type is %s, should be 'CERTIFICATE' or missing", bl.Type)
 	}
-	_, err := x509.ParseCertificate(bl.Bytes)
-	return err
+	if factory.GetDefault().GetProviderName() == "SW" {
+		cert, err := x509.ParseCertificate(bl.Bytes)
+		if err != nil {
+			return err
+		}
+		return isIdentitySignedInCanonicalForm(cert.Signature, identity.Mspid, identity.IdBytes)
+	} else {
+		cert, err := sm2.ParseCertificate(bl.Bytes)
+		if err != nil {
+			return err
+		}
+		return isIdentitySignedInCanonicalForm(cert.Signature, identity.Mspid, identity.IdBytes)
+	}
+}
+
+func isIdentitySignedInCanonicalForm(sig []byte, mspID string, pemEncodedIdentity []byte) error {
+	r, s, err := utils.UnmarshalECDSASignature(sig)
+	if err != nil {
+		return err
+	}
+
+	expectedSig, err := utils.MarshalECDSASignature(r, s)
+	if err != nil {
+		return err
+	}
+
+	if !bytes.Equal(expectedSig, sig) {
+		return errors.Errorf("identity %s for MSP %s has a non canonical signature",
+			string(pemEncodedIdentity), mspID)
+	}
+
+	return nil
 }
