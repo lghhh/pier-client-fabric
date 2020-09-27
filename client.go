@@ -128,7 +128,7 @@ func (c *Client) polling() {
 			}
 
 			var response channel.Response
-			response, err = c.consumer.ChannelClient.Execute(request)
+			response, err = c.consumer.ChannelClient.Query(request)
 			if err != nil {
 				logger.WithFields(logrus.Fields{
 					"error": err.Error(),
@@ -139,10 +139,10 @@ func (c *Client) polling() {
 				continue
 			}
 
-			proof, err := c.getProof(response)
-			if err != nil {
-				continue
-			}
+			//proof, err := c.getProof(response)
+			//if err != nil {
+			//	continue
+			//}
 
 			evs := make([]*Event, 0)
 			if err := json.Unmarshal(response.Payload, &evs); err != nil {
@@ -152,7 +152,7 @@ func (c *Client) polling() {
 				continue
 			}
 			for _, ev := range evs {
-				ev.Proof = proof
+				//ev.Proof = proof
 				c.eventC <- ev.Convert2IBTP(c.pierId, pb.IBTP_INTERCHAIN)
 				if c.outMeta == nil {
 					c.outMeta = make(map[string]uint64)
