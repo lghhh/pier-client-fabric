@@ -290,7 +290,7 @@ func (c *Client) SubmitIBTP(ibtp *pb.IBTP) (*model.PluginResponse, error) {
 		newArgs = append(newArgs, result...)
 	case "interchainCharge":
 		newArgs = append(newArgs, []byte(strconv.FormatBool(response.OK)), content.Args[0])
-		newArgs = append(newArgs, content.Args[2:]...)
+		newArgs = append(newArgs, content.Args[1:]...)
 	}
 
 	ret.Result, err = c.generateCallback(ibtp, newArgs, proof)
